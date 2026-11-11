@@ -13,4 +13,11 @@ One entry per local change to an upstream-owned path (`plugins/**`). Add the ent
 
 `show-me` carries the same flag from upstream itself — no local delta, nothing to re-apply.
 
+### pi-compatible frontmatter on rpi agents
+
+- **Paths**: `plugins/rpi/agents/` — all five `*.md` agent definitions.
+- **Delta**: `tools` lists renamed to the pi tool set (`read, grep, find, bash`, plus `edit, write` for the implementer); `Skill` and `TodoWrite` dropped (no pi equivalents in child sessions); `model:` lines removed so children inherit the session default.
+- **Why**: these files are symlinked into `~/.pi/agent/agents/` and loaded by pi-subagents, which validates tools and models in pi terms.
+- **Sync policy**: keep pi tool names when upstream touches those lines; when upstream adds a tool to an agent, re-map it to the pi name instead of taking the line verbatim. Accepted trade-off: the Claude Code `agents/` loader now sees pi tool names — pi is the primary harness for this fork.
+
 Fork-only paths (`.github/**`, `.agents/**`, `scripts/check-sync-invariants.ts`) have no upstream counterpart and are not decisions — upstream cannot conflict with them.
