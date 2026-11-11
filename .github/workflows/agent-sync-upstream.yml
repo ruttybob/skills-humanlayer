@@ -152,7 +152,7 @@ jobs:
 
           Focus only on the merge of `upstream/main` and the paths it touches under `plugins/`.
 
-          You may inspect `scripts/check-sync-invariants.ts` and `.github/agent-memory/sync-upstream.md` only to understand and validate the local overrides.
+          You may inspect `FORK-DECISIONS.md`, `scripts/check-sync-invariants.ts`, and `.github/agent-memory/sync-upstream.md` only to understand and validate the fork decisions.
 
           # Instructions
 

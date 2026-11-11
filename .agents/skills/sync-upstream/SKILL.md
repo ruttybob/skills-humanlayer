@@ -11,7 +11,7 @@ The goal is a local main that contains every upstream commit with every local ov
 
 ## Fork policy
 
-- Local overrides beat upstream: every line carrying a local-only change must survive the merge. The authoritative override list lives in `scripts/check-sync-invariants.ts` (currently the `disable-model-invocation: true` flags).
+- Local overrides beat upstream: every **fork decision** recorded in `FORK-DECISIONS.md` must survive the merge. `scripts/check-sync-invariants.ts` enforces the machine-checkable subset.
 - Upstream content beats local intent everywhere else: README, plugin bodies, scripts and references are upstream-owned; do not improve or reword them while merging.
 - Merge, never rebase: no history rewriting, no force-push.
 - Do not touch `.github/**`, `LICENSE`, or `.gitignore` as part of conflict resolution.
@@ -35,7 +35,7 @@ git log HEAD..upstream/main --stat
 git diff HEAD...upstream/main --name-only
 ```
 
-Cross-check the changed paths against the override list before merging.
+Cross-check the changed paths against the ledger before merging; name the decisions upstream touches.
 
 Completion criterion: you can name which incoming commits touch override files, if any.
 
@@ -49,7 +49,7 @@ For each unmerged path:
 
 - Content files (README, SKILL.md bodies, scripts, references): take upstream with `git checkout --theirs`, then re-apply the override lines if the conflicting hunk touches their frontmatter.
 - Paths where the fork has no intent: take upstream.
-- A conflict you cannot resolve confidently: take upstream and record the path under SKIPPED in the report with the reason. Never leave conflict markers in the tree.
+- A conflict touching a fork decision where the call is ambiguous: keep the decision and ask the user (interactive run), or keep the decision and list the open question under SKIPPED in the report (CI run). Never leave conflict markers in the tree.
 
 Completion criterion: `git status` shows no unmerged paths.
 
