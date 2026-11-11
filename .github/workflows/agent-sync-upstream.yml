@@ -1,0 +1,239 @@
+# Agent Upstream Sync - iterated skill loop
+#
+# 1. scheduled/manual mode: fetch upstream humanlayer/skills, merge into main, resolve
+#    conflicts per the fork policy, and open a PR.
+# 2. /iterate mode: a maintainer comments on the agent PR and this workflow updates it,
+#    optionally learning durable guidance into .github/agent-memory/sync-upstream.md.
+
+name: "Agent: Upstream Sync"
+
+on:
+  schedule:
+    - cron: "0 13 * * 1" # Mondays 13:00 UTC
+  workflow_dispatch:
+  issue_comment:
+    types: [created] # for iteration!
+
+permissions:
+  contents: write
+  pull-requests: write
+  issues: write
+
+concurrency:
+  group: agent-sync-upstream
+  cancel-in-progress: true
+
+jobs:
+  agent-sync-upstream:
+    if: |
+      github.event_name != 'issue_comment' ||
+      (
+        github.event.issue.pull_request &&
+        startsWith(github.event.comment.body, '/iterate') &&
+        (github.event.comment.author_association == 'OWNER' ||
+         github.event.comment.author_association == 'MEMBER' ||
+         github.event.comment.author_association == 'COLLABORATOR')
+      )
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check iterate marker to bound work-in-progress
+        id: agent_gate
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          EVENT_NAME: ${{ github.event_name }}
+          GITHUB_REPOSITORY: ${{ github.repository }}
+          PR_URL: ${{ github.event.issue.pull_request.url }}
+          WORKFLOW_ID: agent-sync-upstream
+          AGENT_LABEL: agent-sync-upstream
+        run: |
+          # Scheduled runs no-op when an open PR already exists for this agent.
+          if [ "$EVENT_NAME" = "schedule" ]; then
+            EXISTING_PR=$(gh pr list --repo "$GITHUB_REPOSITORY" --state open --label "$AGENT_LABEL" --json number,url --limit 1)
+            if [ "$(echo "$EXISTING_PR" | jq 'length')" -gt 0 ]; then
+              echo "run_agent=false" >> "$GITHUB_OUTPUT"
+              echo "Open PR already exists for $AGENT_LABEL; no-op."
+              exit 0
+            fi
+          fi
+
+          if [ "$EVENT_NAME" != "issue_comment" ]; then
+            echo "run_agent=true" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          # /iterate comments are shared by all recurring agent workflows. The hidden
+          # PR body marker routes the comment to the workflow that opened the PR.
+          PR_DATA=$(gh api "$PR_URL")
+          BODY=$(echo "$PR_DATA" | jq -r '.body // ""')
+          if grep -Fq "<!-- codelayer-agent:workflow=$WORKFLOW_ID;" <<< "$BODY"; then
+            echo "run_agent=true" >> "$GITHUB_OUTPUT"
+            echo "number=$(echo "$PR_DATA" | jq -r '.number')" >> "$GITHUB_OUTPUT"
+            echo "head_ref=$(echo "$PR_DATA" | jq -r '.head.ref')" >> "$GITHUB_OUTPUT"
+            echo "head_sha=$(echo "$PR_DATA" | jq -r '.head.sha')" >> "$GITHUB_OUTPUT"
+          else
+            echo "run_agent=false" >> "$GITHUB_OUTPUT"
+            echo "PR was not created by $WORKFLOW_ID; no-op."
+          fi
+
+      - uses: actions/checkout@v5
+        if: steps.agent_gate.outputs.run_agent == 'true' && github.event_name != 'issue_comment'
+        with:
+          fetch-depth: 0
+
+      - uses: actions/checkout@v5
+        if: steps.agent_gate.outputs.run_agent == 'true' && github.event_name == 'issue_comment'
+        with:
+          ref: ${{ steps.agent_gate.outputs.head_ref }}
+          fetch-depth: 0
+
+      - name: Configure git user & branch
+        if: steps.agent_gate.outputs.run_agent == 'true'
+        shell: bash
+        run: |
+          if [ "${{ github.event_name }}" != "issue_comment" ]; then
+            BRANCH="agent/sync-upstream/$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT"
+            echo "BRANCH=$BRANCH" >> "$GITHUB_ENV"
+            git checkout -b "$BRANCH"
+          fi
+
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+
+      - name: Install bun
+        if: steps.agent_gate.outputs.run_agent == 'true'
+        uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: 1.3.14
+
+      - name: Install Node.js and pi
+        if: steps.agent_gate.outputs.run_agent == 'true'
+        uses: actions/setup-node@v4
+        with:
+          node-version: 24
+
+      - name: Install pi
+        if: steps.agent_gate.outputs.run_agent == 'true'
+        run: npm install -g --ignore-scripts @earendil-works/pi-coding-agent
+
+      - name: Run coding agent (pi)
+        if: steps.agent_gate.outputs.run_agent == 'true'
+        env:
+          ZAI_API_KEY: ${{ secrets.ZAI_API_KEY }}
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GITHUB_REPOSITORY: ${{ github.repository }}
+          PR_NUMBER: ${{ steps.agent_gate.outputs.number }}
+          COMMENT_BODY: ${{ github.event.comment.body }}
+        run: |
+          set -o pipefail
+
+          MEMORY_CONTENT="$(cat .github/agent-memory/sync-upstream.md)"
+
+          if [ "${{ github.event_name }}" = "issue_comment" ]; then
+            bun .github/scripts/agent-iteration.ts \
+              --command prompt \
+              --workflow agent-sync-upstream \
+              --memory .github/agent-memory/sync-upstream.md \
+              --repo "$GITHUB_REPOSITORY" \
+              --pr-number "$PR_NUMBER" \
+              --comment-body "$COMMENT_BODY" > /tmp/sync-prompt.md
+
+            pi --print --no-session --model zai/glm-5.3-flash --thinking high \
+              "$(cat /tmp/sync-prompt.md)" \
+              2>&1 | tee /tmp/agent-output.txt
+            exit 0
+          fi
+
+          PROMPT="$(cat <<'PROMPT_EOF'
+          # Context
+
+          You are syncing this fork with its upstream repository humanlayer/skills. Begin by using the `sync-upstream` skill.
+
+          # Scope
+
+          Focus only on the merge of `upstream/main` and the paths it touches under `plugins/`.
+
+          You may inspect `scripts/check-sync-invariants.ts` and `.github/agent-memory/sync-upstream.md` only to understand and validate the local overrides.
+
+          # Instructions
+
+          1. Fetch upstream and list incoming commits (skill step 1).
+          2. If there is no drift, end with an "up to date" report and stop.
+          3. Merge `upstream/main` and resolve conflicts per the fork policy in the skill.
+          4. Validate with the command below.
+          5. Push your branch.
+
+          ## Validation Commands
+
+          ```bash
+          bun scripts/check-sync-invariants.ts
+          ```
+
+          ## Important Rules
+
+          - Merge, never rebase. No force-push.
+          - Every override listed in `scripts/check-sync-invariants.ts` must survive the merge.
+          - Do not edit `.github/**`, `LICENSE`, or `.gitignore` during conflict resolution.
+          - You are running in a CI runner. Do not stop and ask for user feedback or approvals.
+          - Do not run long integration tests unless explicitly requested.
+
+          ## Agent Memory
+
+          PROMPT_EOF
+          )"
+          # quoted heredoc keeps backticks literal; append memory separately
+          PROMPT="${PROMPT}
+          
+          ${MEMORY_CONTENT}"
+
+          pi --print --no-session --model zai/glm-5.3-flash --thinking high \
+            "$PROMPT" \
+            2>&1 | tee /tmp/agent-output.txt
+
+      - name: Extract PR body
+        if: steps.agent_gate.outputs.run_agent == 'true' && github.event_name != 'issue_comment'
+        run: |
+          # pi --print writes the final assistant text to stdout; strip ANSI just in case.
+          cat /tmp/agent-output.txt | sed 's/\x1b\[[0-9;]*m//g' > /tmp/pr-body.md
+
+      - name: Push and create PR
+        if: steps.agent_gate.outputs.run_agent == 'true' && github.event_name != 'issue_comment'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          AGENT_LABEL: agent-sync-upstream
+          WORKFLOW_ID: agent-sync-upstream
+        run: |
+          if git diff --quiet origin/main...HEAD; then
+            echo "No commits were created by the agent; skipping PR creation."
+            exit 0
+          fi
+
+          git push --set-upstream origin "${{ env.BRANCH }}"
+
+          bun .github/scripts/agent-iteration.ts \
+            --command footer \
+            --workflow "$WORKFLOW_ID" \
+            --memory .github/agent-memory/sync-upstream.md >> /tmp/pr-body.md
+
+          gh label create "$AGENT_LABEL" --description "Recurring Upstream Sync agent PR" --color "0E8A16" || true
+          PR_URL=$(gh pr create --title "[$(date +%m/%d)] Upstream Sync" --body-file /tmp/pr-body.md)
+          gh pr edit "$PR_URL" --add-label "$AGENT_LABEL"
+
+      - name: Push iteration changes and comment
+        if: steps.agent_gate.outputs.run_agent == 'true' && github.event_name == 'issue_comment'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          if ! git diff --quiet HEAD; then
+            git add -A
+            git commit -m "chore: iterate sync-upstream agent feedback"
+            git push origin HEAD:${{ steps.agent_gate.outputs.head_ref }}
+          fi
+
+          gh pr comment ${{ steps.agent_gate.outputs.number }} --body-file /tmp/pr-body.md
+
+      - name: Upload agent output
+        if: always() && steps.agent_gate.outputs.run_agent == 'true'
+        uses: actions/upload-artifact@v4
+        with:
+          name: agent-output
+          path: /tmp/agent-output.txt
