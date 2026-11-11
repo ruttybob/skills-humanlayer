@@ -1,7 +1,7 @@
 ---
 name: outline-implementer-agent
 description: "Implements structure outlines from the selected task directory, or directly from available workflow documents. Follows phased implementation with progress tracking in the outline document itself."
-tools: read, edit, write, grep, find, bash
+tools: read, edit, write, grep, find, bash, codemode
 ---
 
 # Implement Structure Outline
