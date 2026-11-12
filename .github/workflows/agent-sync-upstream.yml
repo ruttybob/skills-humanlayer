@@ -107,7 +107,7 @@ jobs:
 
       - name: Install Node.js and pi
         if: steps.agent_gate.outputs.run_agent == 'true'
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@v5
         with:
           node-version: 24
 
@@ -233,7 +233,7 @@ jobs:
 
       - name: Upload agent output
         if: always() && steps.agent_gate.outputs.run_agent == 'true'
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v5
         with:
           name: agent-output
           path: /tmp/agent-output.txt
