@@ -20,4 +20,11 @@ One entry per local change to an upstream-owned path (`plugins/**`). Add the ent
 - **Why**: these files are symlinked into `~/.pi/agent/agents/` and loaded by pi-subagents, which validates tools and models in pi terms.
 - **Sync policy**: keep pi tool names when upstream touches those lines; when upstream adds a tool to an agent, re-map it to the pi name instead of taking the line verbatim. Accepted trade-off: the Claude Code `agents/` loader now sees pi tool names — pi is the primary harness for this fork.
 
+### Bumped action majors in the loop template
+
+- **Paths**: `plugins/build-iterated-agentic-loop/skills/build-iterated-agentic-loop/references/workflow-template.yml`
+- **Delta**: `actions/setup-node@v4` and `actions/upload-artifact@v4` bumped to `@v5` (node20 deprecation).
+- **Why**: the template is the source for newly generated loops; every generated workflow inherited the deprecated actions.
+- **Sync policy**: keep the bumps; adopt any higher major upstream ships.
+
 Fork-only paths (`.github/**`, `.agents/**`, `scripts/check-sync-invariants.ts`) have no upstream counterpart and are not decisions — upstream cannot conflict with them.
